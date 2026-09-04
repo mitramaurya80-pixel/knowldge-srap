@@ -18,11 +18,21 @@ Usage:
 
 import argparse
 import json
+import re
 import time
 from datetime import datetime, timezone
 
 import requests
 import feedparser
+
+
+def clean_html(raw_html):
+    """Strip HTML tags from RSS summaries so they read as plain text."""
+    if not raw_html:
+        return ""
+    text = re.sub(r"<[^>]+>", " ", raw_html)
+    text = re.sub(r"\s+", " ", text).strip()
+    return text
 
 # ----------------------------------------------------------------------
 # CONFIG
@@ -71,6 +81,10 @@ def get_hacker_news(limit=ITEMS_PER_SOURCE):
             results.append({
                 "title": item.get("title"),
                 "url": item.get("url", f"https://news.ycombinator.com/item?id={story_id}"),
+                # Most HN stories are links (no body text) — "text" is only
+                # present on self/Ask HN posts. discussion_url always works.
+                "summary": clean_html(item.get("text", "")) or "(link post — see discussion for context)",
+                "discussion_url": f"https://news.ycombinator.com/item?id={story_id}",
                 "score": item.get("score"),
                 "comments": item.get("descendants", 0),
                 "source": "Hacker News",
@@ -95,6 +109,7 @@ def get_arxiv(limit=5):
                 results.append({
                     "title": entry.title.replace("\n", " ").strip(),
                     "url": entry.link,
+                    "summary": clean_html(entry.get("summary", "")),
                     "published": entry.get("published", ""),
                     "category": label,
                     "source": "arXiv",
@@ -111,9 +126,15 @@ def get_rss_feeds(limit=ITEMS_PER_SOURCE):
         try:
             feed = feedparser.parse(url)
             for entry in feed.entries[:limit]:
+                raw_summary = entry.get("summary", "") or entry.get("description", "")
+                summary = clean_html(raw_summary)
+                # Trim long excerpts to a readable snippet
+                if len(summary) > 300:
+                    summary = summary[:300].rsplit(" ", 1)[0] + "..."
                 results.append({
                     "title": entry.get("title", "").strip(),
                     "url": entry.get("link", ""),
+                    "summary": summary,
                     "published": entry.get("published", entry.get("updated", "")),
                     "source": name,
                 })
@@ -187,7 +208,11 @@ def print_summary(results):
         for item in block["items"]:
             title = item.get("title", "Untitled")
             url = item.get("url", "")
+            summary = item.get("summary") or item.get("description") or ""
             print(f"- {title}\n  {url}")
+            if summary:
+                # indent and soft-wrap the summary under the title/link
+                print(f"  > {summary}")
 
 
 # ----------------------------------------------------------------------
